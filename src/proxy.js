@@ -1,4 +1,3 @@
-"use strict";
 import fetch from 'node-fetch';
 import lodash from 'lodash'; // Import lodash as the default import
 import { generateRandomIP, randomUserAgent } from './utils.js';
@@ -57,26 +56,34 @@ export async function processRequest(request, reply) {
                 'x-forwarded-for': randomIP,
                 'via': randomVia(),
             },
-            timeout: 10000,
-            follow: 5, // max redirects
-            compress: true,
+            redirect: 'manual', // Manually handle redirects
+            compress: false, // Disable fetch's auto-decompression
         });
 
         if (!response.ok) {
             return handleRedirect(request, reply);
         }
 
-        const buffer = await response.arrayBuffer();
-
         copyHdrs(response, reply);
+
         reply.header('content-encoding', 'identity');
         request.params.originType = response.headers.get('content-type') || '';
-        request.params.originSize = buffer.length;
+        request.params.originSize = response.headers.get('content-length') || '0';
 
         if (checkCompression(request)) {
-            return applyCompression(request, reply, buffer);
+            // Use streaming for compression
+            return applyCompression(request, reply, response.body);
         } else {
-            return performBypass(request, reply, buffer);
+            reply.header('x-proxy-bypass', 1);
+
+            for (const headerName of ['accept-ranges', 'content-type', 'content-length', 'content-range']) {
+                if (response.headers.has(headerName)) {
+                    reply.header(headerName, response.headers.get(headerName));
+                }
+            }
+
+            // Stream the response body directly to the client
+            return response.body.pipe(reply.raw);
         }
     } catch (err) {
         return handleRedirect(request, reply);
